@@ -7,6 +7,7 @@ import {
   ExternalLink,
   Flag,
   Lock,
+  Package,
   ShieldCheck,
   Trash2,
   X,
@@ -19,6 +20,7 @@ import {
   submitOrUpdateReview,
   subscribeVisibleReviews,
 } from '@/src/lib/firestoreService';
+import { getIconDataUri } from '@/src/lib/iconUtils';
 import { CatalogItem, ItemReview, MAX_LENGTHS } from '@/src/types/kadirhub';
 
 interface EntryDetailModalProps {
@@ -44,6 +46,10 @@ export function EntryDetailModal({
   const [reviewError, setReviewError] = useState<string | null>(null);
 
   const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<{
+    label: string;
+    percent: number;
+  } | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [decryptedLink, setDecryptedLink] = useState<string | null>(null);
   const [downloadDoneName, setDownloadDoneName] = useState<string | null>(null);
@@ -69,6 +75,7 @@ export function EntryDetailModal({
     setDecryptedLink(null);
     setDownloadDoneName(null);
     setDownloadError(null);
+    setDownloadProgress(null);
     setChecksumVerified(null);
     setShowCipherDetails(false);
     setReviewError(null);
@@ -103,6 +110,7 @@ export function EntryDetailModal({
 
   if (!item) return null;
 
+  const iconUri = getIconDataUri(item.iconBase64);
   const myReview = user ? reviews.find((r) => r.userId === user.uid) : undefined;
   const computedAvg =
     reviews.length > 0
@@ -115,8 +123,11 @@ export function EntryDetailModal({
     setDownloadError(null);
     setDownloadDoneName(null);
     setDownloading(true);
+    setDownloadProgress({ label: 'Starting AES-256-GCM decryption...', percent: 5 });
     try {
-      const res = await decryptAndDownloadCatalogItem(item);
+      const res = await decryptAndDownloadCatalogItem(item, (label, percent) => {
+        setDownloadProgress({ label, percent });
+      });
       setChecksumVerified(res.checksumVerified);
       if (res.type === 'link' && res.url) {
         setDecryptedLink(res.url);
@@ -129,6 +140,7 @@ export function EntryDetailModal({
       );
     } finally {
       setDownloading(false);
+      setDownloadProgress(null);
     }
   }
 
@@ -191,41 +203,62 @@ export function EntryDetailModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/55 backdrop-blur-xs p-0 sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="entry-modal-title"
     >
-      <div className="bg-white border border-slate-200 rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-xl">
+      <div className="bg-white border border-slate-200 rounded-t-3xl sm:rounded-xl w-full max-w-2xl max-h-[92dvh] overflow-y-auto shadow-xl">
+        {/* Android Bottom Sheet Drag Indicator */}
+        <div className="sm:hidden pt-3 pb-1 flex justify-center">
+          <div className="w-10 h-1.5 rounded-full bg-slate-300" aria-hidden="true" />
+        </div>
+
         {/* Header */}
-        <div className="sticky top-0 z-10 bg-white border-b border-slate-200 px-6 py-4 flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h2 id="entry-modal-title" className="font-display text-xl font-bold text-slate-900 truncate">
-              {item.title}
-            </h2>
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-              <span>{item.category}</span>
-              <span aria-hidden="true">·</span>
-              <span className="font-mono tabular-nums">v{item.version}</span>
-              <span aria-hidden="true">·</span>
-              <span className="tabular-nums">{item.fileSizeLabel}</span>
-              <span aria-hidden="true">·</span>
-              <span>{item.creatorHandle}</span>
-              <span aria-hidden="true">·</span>
-              <span className="tabular-nums">{item.downloadCount.toLocaleString()} downloads</span>
+        <div className="sticky top-0 z-10 bg-white border-b border-slate-200 px-5 sm:px-6 py-4 flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3 min-w-0">
+            {iconUri ? (
+              <img
+                src={iconUri}
+                alt={`${item.title} icon`}
+                className="w-12 h-12 rounded-xl object-cover border border-slate-200 shrink-0"
+              />
+            ) : (
+              <div className="w-12 h-12 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-500 shrink-0">
+                <Package className="w-5 h-5" />
+              </div>
+            )}
+            <div className="min-w-0">
+              <h2
+                id="entry-modal-title"
+                className="font-display text-lg sm:text-xl font-bold text-slate-900 truncate"
+              >
+                {item.title}
+              </h2>
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500">
+                <span>{item.category}</span>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono tabular-nums">v{item.version}</span>
+                <span aria-hidden="true">·</span>
+                <span className="tabular-nums">{item.fileSizeLabel}</span>
+                <span aria-hidden="true">·</span>
+                <span>{item.uploaderName}</span>
+                <span aria-hidden="true">·</span>
+                <span className="tabular-nums">{item.downloadCount.toLocaleString()} downloads</span>
+              </div>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close details"
-            className="p-2 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
+            className="min-w-[44px] min-h-[44px] flex items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="p-6 space-y-6">
+        <div className="p-5 sm:p-6 space-y-6">
           {/* Rating + Cipher Header */}
           <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-100">
             <StarRatingDisplay rating={computedAvg} count={computedCount} size="md" />
@@ -244,7 +277,7 @@ export function EntryDetailModal({
                       title: item.title,
                     })
                   }
-                  className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-red-600 transition-colors"
+                  className="min-h-[40px] inline-flex items-center gap-1 text-xs text-slate-500 hover:text-red-600 transition-colors px-2"
                 >
                   <Flag className="w-3.5 h-3.5" />
                   <span>Report</span>
@@ -258,15 +291,15 @@ export function EntryDetailModal({
           </p>
 
           {/* Direct Download / Decryption Box */}
-          <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="min-w-0">
                 <h3 className="text-sm font-semibold text-slate-900">
                   {item.itemType === 'encrypted_file'
                     ? 'Direct AES-256-GCM File Download'
                     : 'Encrypted Destination Link'}
                 </h3>
-                <p className="text-xs text-slate-500 mt-0.5 font-mono truncate max-w-sm">
+                <p className="text-xs text-slate-500 mt-0.5 font-mono truncate">
                   SHA-256: {item.sha256Checksum.slice(0, 24)}...
                 </p>
               </div>
@@ -275,7 +308,7 @@ export function EntryDetailModal({
                 type="button"
                 onClick={handleDownload}
                 disabled={downloading}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                className="min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 rounded-xl sm:rounded-lg transition-colors whitespace-nowrap shrink-0"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>
@@ -287,6 +320,21 @@ export function EntryDetailModal({
                 </span>
               </button>
             </div>
+
+            {downloadProgress && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs text-slate-700">
+                  <span>{downloadProgress.label}</span>
+                  <span className="font-mono tabular-nums">{downloadProgress.percent}%</span>
+                </div>
+                <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-600 transition-all duration-150"
+                    style={{ width: `${downloadProgress.percent}%` }}
+                  />
+                </div>
+              </div>
+            )}
 
             {downloadError && (
               <p className="text-xs font-medium text-red-600">{downloadError}</p>
@@ -313,7 +361,7 @@ export function EntryDetailModal({
                 <button
                   type="button"
                   onClick={handleCopyLink}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded transition-colors shrink-0"
+                  className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors shrink-0"
                 >
                   {copiedLink ? (
                     <Check className="w-3.5 h-3.5 text-emerald-600" />
@@ -329,7 +377,7 @@ export function EntryDetailModal({
               <button
                 type="button"
                 onClick={() => setShowCipherDetails((v) => !v)}
-                className="text-xs font-medium text-slate-600 hover:text-slate-900 underline underline-offset-2"
+                className="min-h-[36px] text-xs font-medium text-slate-600 hover:text-slate-900 underline underline-offset-2"
               >
                 {showCipherDetails
                   ? 'Hide Cryptographic Envelope'
@@ -369,7 +417,7 @@ export function EntryDetailModal({
           {reportTarget && user && (
             <form
               onSubmit={handleSubmitReport}
-              className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-3"
+              className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3"
             >
               <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold text-amber-900">
@@ -379,7 +427,7 @@ export function EntryDetailModal({
                 <button
                   type="button"
                   onClick={() => setReportTarget(null)}
-                  className="text-xs text-amber-800 hover:underline"
+                  className="text-xs text-amber-800 hover:underline px-2 py-1"
                 >
                   Cancel
                 </button>
@@ -392,12 +440,12 @@ export function EntryDetailModal({
                 value={reportReason}
                 onChange={(e) => setReportReason(e.target.value)}
                 placeholder="Describe broken link, malware concern, or spam..."
-                className="w-full px-3 py-2 text-sm bg-white border border-amber-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-600"
+                className="w-full min-h-[44px] px-3 py-2 text-base sm:text-sm bg-white border border-amber-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-600"
               />
               <button
                 type="submit"
                 disabled={submittingReport}
-                className="px-4 py-1.5 text-xs font-semibold text-white bg-amber-700 hover:bg-amber-800 rounded-lg transition-colors"
+                className="min-h-[44px] px-4 py-2 text-xs font-semibold text-white bg-amber-700 hover:bg-amber-800 rounded-lg transition-colors"
               >
                 {submittingReport ? 'Submitting...' : 'Submit Report'}
               </button>
@@ -419,10 +467,14 @@ export function EntryDetailModal({
               </span>
             </div>
 
-            {user ? (
+            {item.status !== 'approved' ? (
+              <p className="text-xs text-slate-500">
+                Reviews become available once this release is approved.
+              </p>
+            ) : user ? (
               <form
                 onSubmit={handleSubmitReview}
-                className="bg-slate-50 border border-slate-200 rounded-lg p-4 space-y-3"
+                className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs font-medium text-slate-700">
@@ -437,7 +489,7 @@ export function EntryDetailModal({
                   onChange={(e) => setComment(e.target.value)}
                   placeholder="Share hands-on feedback, link verification, or build quality notes..."
                   required
-                  className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  className="w-full px-3 py-2 text-base sm:text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
                 />
                 {reviewError && <p className="text-xs font-medium text-red-600">{reviewError}</p>}
                 <div className="flex items-center justify-between">
@@ -447,14 +499,14 @@ export function EntryDetailModal({
                   <button
                     type="submit"
                     disabled={submittingReview || comment.trim().length < 1}
-                    className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-50 rounded-lg transition-colors"
+                    className="min-h-[44px] px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-50 rounded-lg transition-colors"
                   >
                     {submittingReview ? 'Saving...' : myReview ? 'Update Review' : 'Post Review'}
                   </button>
                 </div>
               </form>
             ) : (
-              <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2 text-xs text-slate-600">
                   <Lock className="w-4 h-4 text-slate-500 shrink-0" />
                   <span>Sign in with Google to leave a 5-star rating and review.</span>
@@ -462,7 +514,7 @@ export function EntryDetailModal({
                 <button
                   type="button"
                   onClick={onSignIn}
-                  className="px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+                  className="min-h-[44px] px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
                 >
                   Sign in with Google
                 </button>
@@ -475,15 +527,15 @@ export function EntryDetailModal({
                 <div className="h-16 bg-slate-100 rounded-lg animate-pulse" />
               </div>
             ) : reviews.length === 0 ? (
-              <p className="text-sm text-slate-500 py-4 text-center border border-dashed border-slate-200 rounded-lg">
+              <p className="text-sm text-slate-500 py-4 text-center border border-dashed border-slate-200 rounded-xl">
                 No reviews yet. Be the first to rate {item.title}.
               </p>
             ) : (
-              <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
+              <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl">
                 {reviews.map((rev) => {
                   const canDelete = Boolean(isAdmin || (user && rev.userId === user.uid));
                   return (
-                    <div key={rev.id} className="p-4 flex items-start justify-between gap-4">
+                    <div key={rev.id} className="p-4 flex items-start justify-between gap-3">
                       <div className="space-y-1 min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-sm font-semibold text-slate-900">
@@ -518,9 +570,9 @@ export function EntryDetailModal({
                               })
                             }
                             title="Report review"
-                            className="p-1.5 text-slate-400 hover:text-amber-600 rounded transition-colors"
+                            className="min-w-[40px] min-h-[40px] flex items-center justify-center text-slate-400 hover:text-amber-600 rounded-lg transition-colors"
                           >
-                            <Flag className="w-3.5 h-3.5" />
+                            <Flag className="w-4 h-4" />
                           </button>
                         )}
                         {canDelete && (
@@ -529,7 +581,7 @@ export function EntryDetailModal({
                             onClick={() => handleDeleteReview(rev.id)}
                             title="Delete review"
                             aria-label="Delete review"
-                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                            className="min-w-[40px] min-h-[40px] flex items-center justify-center text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>

@@ -15,6 +15,7 @@ import {
   subscribeAllReviewsAdmin,
   subscribeApprovedCatalogItems,
   subscribeModerationReportsAdmin,
+  subscribeMyUploads,
 } from '@/src/lib/firestoreService';
 import {
   AdminRecord,
@@ -44,6 +45,7 @@ export default function App() {
   });
 
   const [approvedItems, setApprovedItems] = useState<CatalogItem[]>([]);
+  const [myUploads, setMyUploads] = useState<CatalogItem[]>([]);
   const [itemsLoading, setItemsLoading] = useState(false);
 
   const [adminItems, setAdminItems] = useState<CatalogItem[]>([]);
@@ -67,6 +69,7 @@ export default function App() {
         setIsRootAdmin(false);
         setIsFirestoreAdmin(false);
         setApprovedItems([]);
+        setMyUploads([]);
         setAdminItems([]);
         setAdminReviews([]);
         setReports([]);
@@ -76,7 +79,7 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // Authenticated catalog_items subscription (rules require signed-in user + status == "approved")
+  // Authenticated catalog_items & uploader's own uploads subscriptions
   useEffect(() => {
     if (authLoading || !user) return;
     setItemsLoading(true);
@@ -88,8 +91,15 @@ export default function App() {
       () => setItemsLoading(false)
     );
 
+    const unsubMyUploads = subscribeMyUploads(
+      user.uid,
+      (items) => setMyUploads(items),
+      () => {}
+    );
+
     return () => {
       unsubItems();
+      unsubMyUploads();
     };
   }, [authLoading, user?.uid]);
 
@@ -128,12 +138,10 @@ export default function App() {
   const openReportsCount = isFirestoreAdmin
     ? reports.filter((r) => r.status === 'open').length
     : 0;
-
-  const myUploads = useMemo(() => {
-    if (!user) return [];
-    const pool = isFirestoreAdmin ? adminItems : approvedItems;
-    return pool.filter((item) => item.uploaderUid === user.uid);
-  }, [user, isFirestoreAdmin, adminItems, approvedItems]);
+  const pendingApprovalsCount = isFirestoreAdmin
+    ? adminItems.filter((i) => i.status === 'pending').length
+    : 0;
+  const adminBadgeCount = pendingApprovalsCount + openReportsCount;
 
   const encryptedCatalogItems = useMemo(
     () => approvedItems.filter((item) => item.itemType === 'encrypted_file'),
@@ -144,10 +152,11 @@ export default function App() {
     if (!selectedItemId) return null;
     return (
       approvedItems.find((i) => i.id === selectedItemId) ||
+      myUploads.find((i) => i.id === selectedItemId) ||
       adminItems.find((i) => i.id === selectedItemId) ||
       null
     );
-  }, [selectedItemId, approvedItems, adminItems]);
+  }, [selectedItemId, approvedItems, myUploads, adminItems]);
 
   async function handleSignIn() {
     setAuthError(null);
@@ -189,10 +198,10 @@ export default function App() {
         authLoading={authLoading}
         onSignIn={handleSignIn}
         onSignOut={handleSignOut}
-        pendingModerationCount={openReportsCount}
+        adminBadgeCount={adminBadgeCount}
       />
 
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-8">
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
         {authError && (
           <div className="mb-6 bg-red-50 border border-red-200 text-red-700 text-xs font-medium px-4 py-3 rounded-lg flex items-center justify-between">
             <span>{authError}</span>
@@ -216,6 +225,7 @@ export default function App() {
         {activeTab === 'vault' && (
           <VaultView
             user={user}
+            isAdmin={isFirestoreAdmin}
             encryptedItems={encryptedCatalogItems}
             loading={authLoading || itemsLoading}
             onSignIn={handleSignIn}
@@ -225,6 +235,7 @@ export default function App() {
         {activeTab === 'submit' && (
           <SubmitView
             user={user}
+            isAdmin={isFirestoreAdmin}
             myUploads={myUploads}
             onSignIn={handleSignIn}
             onSelectItem={(item) => setSelectedItemId(item.id)}
@@ -248,19 +259,19 @@ export default function App() {
         )}
       </main>
 
-      <footer className="border-t border-slate-200 bg-white mt-12">
+      <footer className="border-t border-slate-200 bg-white mt-8 pb-20 md:pb-0">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
           <p>
             KadirHub · Curated by <span className="font-semibold text-slate-700">{CREATOR_HANDLE}</span>{' '}
             · AES-256-GCM Shared Firestore Sync
           </p>
-          <div className="flex items-center gap-5">
+          <div className="flex flex-wrap items-center justify-center gap-5">
             <button
               type="button"
               onClick={() => setActiveTab('directory')}
               className="hover:text-slate-900 transition-colors"
             >
-              Directory
+              Explore
             </button>
             <button
               type="button"
@@ -274,7 +285,7 @@ export default function App() {
               onClick={() => setActiveTab('submit')}
               className="hover:text-slate-900 transition-colors"
             >
-              Submit Release
+              Upload
             </button>
             <button
               type="button"

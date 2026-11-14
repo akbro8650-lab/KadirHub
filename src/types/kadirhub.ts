@@ -1,6 +1,6 @@
 export type CatalogCategory = 'App' | 'Link' | 'Tool' | 'Game' | 'Resource';
 export type CatalogItemType = 'link' | 'encrypted_file';
-export type CatalogStatus = 'approved' | 'flagged' | 'archived';
+export type CatalogStatus = 'pending' | 'approved' | 'flagged' | 'archived';
 export type ReviewModerationStatus = 'visible' | 'flagged' | 'hidden';
 export type ReportTargetType = 'catalog_item' | 'review';
 export type ReportStatus = 'open' | 'resolved' | 'dismissed';
@@ -8,12 +8,17 @@ export type ViewTab = 'directory' | 'vault' | 'submit' | 'admin';
 
 export const CATEGORIES: CatalogCategory[] = ['App', 'Link', 'Tool', 'Game', 'Resource'];
 
+export const CHUNK_SIZE_BYTES = 450000;
+export const MAX_UPLOAD_BYTES = 52428800; // 50 MB
+
 export const MAX_LENGTHS = {
   title: 120,
   description: 2000,
   comment: 1000,
   reportReason: 400,
-  maxFileBytes: 600000,
+  iconBase64: 120000,
+  uploaderName: 120,
+  maxFileBytes: MAX_UPLOAD_BYTES,
 } as const;
 
 export const ROOT_ADMIN_EMAIL = 'kadir25.bd@gmail.com';
@@ -40,6 +45,8 @@ export interface CatalogItem {
   averageRating: number;
   reviewCount: number;
   uploaderUid: string;
+  uploaderName: string;
+  iconBase64: string;
   createdAt: Date | null;
   updatedAt: Date | null;
 }
@@ -50,6 +57,7 @@ export interface EncryptedFileDoc {
   fileName: string;
   mimeType: string;
   byteSize: number;
+  chunkCount: number;
   ciphertextBase64: string;
   ivBase64: string;
   sha256Checksum: string;
@@ -58,6 +66,17 @@ export interface EncryptedFileDoc {
   uploaderUid: string;
   createdAt: Date | null;
   updatedAt: Date | null;
+}
+
+export interface EncryptedFileChunkDoc {
+  fileId: string;
+  catalogItemId: string;
+  chunkIndex: number;
+  byteSize: number;
+  ciphertextBase64: string;
+  ivBase64: string;
+  status: CatalogStatus;
+  uploaderUid: string;
 }
 
 export interface ItemReview {

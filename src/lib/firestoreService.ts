@@ -21,6 +21,7 @@ import {
   encryptBytesWithVaultKey,
   encryptTextWithVaultKey,
   formatBytes,
+  sha256Hex,
   triggerBrowserFileDownload,
 } from '@/src/lib/crypto';
 import { auth, db, handleFirestoreError, OperationType } from '@/src/lib/firebase';
@@ -30,10 +31,12 @@ import {
   CatalogItem,
   CatalogItemType,
   CatalogStatus,
+  CHUNK_SIZE_BYTES,
   CREATOR_HANDLE,
   EncryptedFileDoc,
   ItemReview,
   MAX_LENGTHS,
+  MAX_UPLOAD_BYTES,
   ModerationReport,
   ReportStatus,
   ReportTargetType,
@@ -83,6 +86,8 @@ function mapCatalogItem(id: string, data: Record<string, unknown>): CatalogItem 
     averageRating: Number(data.averageRating ?? 0),
     reviewCount: Number(data.reviewCount ?? 0),
     uploaderUid: String(data.uploaderUid ?? ''),
+    uploaderName: String(data.uploaderName ?? data.creatorHandle ?? 'Creator'),
+    iconBase64: String(data.iconBase64 ?? ''),
     createdAt: toDateOrNull(data.createdAt),
     updatedAt: toDateOrNull(data.updatedAt),
   };
@@ -95,6 +100,7 @@ function mapEncryptedFile(id: string, data: Record<string, unknown>): EncryptedF
     fileName: String(data.fileName ?? 'download.bin'),
     mimeType: String(data.mimeType ?? 'application/octet-stream'),
     byteSize: Number(data.byteSize ?? 0),
+    chunkCount: Number(data.chunkCount ?? 0),
     ciphertextBase64: String(data.ciphertextBase64 ?? ''),
     ivBase64: String(data.ivBase64 ?? ''),
     sha256Checksum: String(data.sha256Checksum ?? ''),
@@ -176,13 +182,15 @@ export function subscribeApprovedCatalogItems(
   );
 }
 
-export function subscribeAllCatalogItemsAdmin(
+export function subscribeMyUploads(
+  uid: string,
   onData: (items: CatalogItem[]) => void,
   onError: (err: Error) => void
 ): Unsubscribe {
   const path = 'catalog_items';
+  const q = query(collection(db, path), where('uploaderUid', '==', uid));
   return onSnapshot(
-    collection(db, path),
+    q,
     (snapshot) => {
       const items = snapshot.docs
         .map((d) => mapCatalogItem(d.id, d.data() as Record<string, unknown>))
@@ -196,19 +204,18 @@ export function subscribeAllCatalogItemsAdmin(
   );
 }
 
-export function subscribeApprovedEncryptedFiles(
-  onData: (files: EncryptedFileDoc[]) => void,
+export function subscribeAllCatalogItemsAdmin(
+  onData: (items: CatalogItem[]) => void,
   onError: (err: Error) => void
 ): Unsubscribe {
-  const path = 'encrypted_files';
-  const q = query(collection(db, path), where('status', '==', 'approved'));
+  const path = 'catalog_items';
   return onSnapshot(
-    q,
+    collection(db, path),
     (snapshot) => {
-      const files = snapshot.docs
-        .map((d) => mapEncryptedFile(d.id, d.data() as Record<string, unknown>))
-        .sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0));
-      onData(files);
+      const items = snapshot.docs
+        .map((d) => mapCatalogItem(d.id, d.data() as Record<string, unknown>))
+        .sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0));
+      onData(items);
     },
     (error) => {
       onError(error);
@@ -315,7 +322,195 @@ export function subscribeAdmins(
   );
 }
 
-// --- Create Catalog Item (+ Encrypted File if applicable) ---
+// --- Internal File Upload & Chunking Helpers ---
+
+export type ProgressCallback = (label: string, percent: number) => void;
+
+async function uploadEncryptedFileWithChunks(params: {
+  fileId: string;
+  catalogItemId: string;
+  file: File;
+  status: CatalogStatus;
+  uploaderUid: string;
+  onProgress?: ProgressCallback;
+}): Promise<{ sha256Checksum: string; byteSize: number; chunkCount: number }> {
+  const { fileId, catalogItemId, file, status, uploaderUid, onProgress } = params;
+  if (file.size < 1 || file.size > MAX_UPLOAD_BYTES) {
+    throw new Error(
+      `File size must be between 1 byte and ${formatBytes(MAX_UPLOAD_BYTES)} (50 MB).`
+    );
+  }
+
+  onProgress?.('Reading & hashing binary file...', 5);
+  const rawBytes = new Uint8Array(await file.arrayBuffer());
+  const fullSha256 = await sha256Hex(rawBytes);
+
+  if (rawBytes.byteLength <= CHUNK_SIZE_BYTES) {
+    onProgress?.('Encrypting file with AES-256-GCM...', 40);
+    const cipher = await encryptBytesWithVaultKey(rawBytes);
+    try {
+      await setDoc(doc(db, 'encrypted_files', fileId), {
+        catalogItemId,
+        fileName: file.name || 'file.bin',
+        mimeType: file.type || 'application/octet-stream',
+        byteSize: rawBytes.byteLength,
+        chunkCount: 0,
+        ciphertextBase64: cipher.ciphertextBase64,
+        ivBase64: cipher.ivBase64,
+        sha256Checksum: fullSha256,
+        encryptionAlgorithm: 'AES-256-GCM',
+        status,
+        uploaderUid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `encrypted_files/${fileId}`);
+    }
+    onProgress?.('File encrypted and stored.', 100);
+    return { sha256Checksum: fullSha256, byteSize: rawBytes.byteLength, chunkCount: 0 };
+  }
+
+  // Chunked upload (> 450,000 bytes, up to 50 MB)
+  const chunkCount = Math.ceil(rawBytes.byteLength / CHUNK_SIZE_BYTES);
+  onProgress?.(`Preparing ${chunkCount} encrypted chunks...`, 10);
+
+  try {
+    await setDoc(doc(db, 'encrypted_files', fileId), {
+      catalogItemId,
+      fileName: file.name || 'file.bin',
+      mimeType: file.type || 'application/octet-stream',
+      byteSize: rawBytes.byteLength,
+      chunkCount,
+      ciphertextBase64: '',
+      ivBase64: '',
+      sha256Checksum: fullSha256,
+      encryptionAlgorithm: 'AES-256-GCM',
+      status,
+      uploaderUid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `encrypted_files/${fileId}`);
+  }
+
+  const CHUNKS_PER_BATCH = 8;
+  for (let start = 0; start < chunkCount; start += CHUNKS_PER_BATCH) {
+    const end = Math.min(chunkCount, start + CHUNKS_PER_BATCH);
+    const batch = writeBatch(db);
+
+    for (let i = start; i < end; i++) {
+      const offset = i * CHUNK_SIZE_BYTES;
+      const slice = rawBytes.subarray(offset, Math.min(rawBytes.byteLength, offset + CHUNK_SIZE_BYTES));
+      const chunkCipher = await encryptBytesWithVaultKey(slice);
+      const chunkRef = doc(db, 'encrypted_files', fileId, 'chunks', `chunk_${i}`);
+      batch.set(chunkRef, {
+        fileId,
+        catalogItemId,
+        chunkIndex: i,
+        byteSize: slice.byteLength,
+        ciphertextBase64: chunkCipher.ciphertextBase64,
+        ivBase64: chunkCipher.ivBase64,
+        status,
+        uploaderUid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    try {
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(
+        error,
+        OperationType.WRITE,
+        `encrypted_files/${fileId}/chunks/chunk_${start}`
+      );
+    }
+
+    const pct = Math.min(98, Math.round(10 + (end / chunkCount) * 88));
+    onProgress?.(`Uploading encrypted chunks (${end}/${chunkCount})...`, pct);
+  }
+
+  return { sha256Checksum: fullSha256, byteSize: rawBytes.byteLength, chunkCount };
+}
+
+async function updateEncryptedFileAndChunksStatus(
+  fileId: string,
+  status: CatalogStatus
+): Promise<void> {
+  if (!fileId) return;
+  const filePath = `encrypted_files/${fileId}`;
+  let fileSnap;
+  try {
+    fileSnap = await getDoc(doc(db, 'encrypted_files', fileId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, filePath);
+  }
+
+  if (!fileSnap.exists()) return;
+  const chunkCount = Number(fileSnap.data().chunkCount ?? 0);
+
+  try {
+    await updateDoc(doc(db, 'encrypted_files', fileId), {
+      status,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, filePath);
+  }
+
+  if (chunkCount > 0) {
+    const BATCH_LIMIT = 200;
+    for (let start = 0; start < chunkCount; start += BATCH_LIMIT) {
+      const end = Math.min(chunkCount, start + BATCH_LIMIT);
+      const batch = writeBatch(db);
+      for (let i = start; i < end; i++) {
+        batch.update(doc(db, 'encrypted_files', fileId, 'chunks', `chunk_${i}`), {
+          status,
+          updatedAt: serverTimestamp(),
+        });
+      }
+      try {
+        await batch.commit();
+      } catch (error) {
+        handleFirestoreError(
+          error,
+          OperationType.UPDATE,
+          `encrypted_files/${fileId}/chunks`
+        );
+      }
+    }
+  }
+}
+
+async function deleteEncryptedFileAndChunks(fileId: string): Promise<void> {
+  if (!fileId) return;
+  const filePath = `encrypted_files/${fileId}`;
+  try {
+    const fileSnap = await getDoc(doc(db, 'encrypted_files', fileId));
+    if (fileSnap.exists()) {
+      const chunkCount = Number(fileSnap.data().chunkCount ?? 0);
+      if (chunkCount > 0) {
+        const BATCH_LIMIT = 200;
+        for (let start = 0; start < chunkCount; start += BATCH_LIMIT) {
+          const end = Math.min(chunkCount, start + BATCH_LIMIT);
+          const batch = writeBatch(db);
+          for (let i = start; i < end; i++) {
+            batch.delete(doc(db, 'encrypted_files', fileId, 'chunks', `chunk_${i}`));
+          }
+          await batch.commit();
+        }
+      }
+      await deleteDoc(doc(db, 'encrypted_files', fileId));
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, filePath);
+  }
+}
+
+// --- Create Catalog Item (v1.1.0 Open Community Upload + 50 MB Chunked) ---
 
 export interface CreateCatalogInput {
   title: string;
@@ -325,80 +520,77 @@ export interface CreateCatalogInput {
   version: string;
   targetUrl?: string;
   file?: File | null;
+  iconBase64?: string;
 }
 
 export async function createCatalogItem(
   user: User,
-  input: CreateCatalogInput
+  input: CreateCatalogInput,
+  isAdmin: boolean,
+  onProgress?: ProgressCallback
 ): Promise<string> {
   const title = input.title.trim().slice(0, MAX_LENGTHS.title);
   const description = input.description.trim().slice(0, MAX_LENGTHS.description);
   const version = (input.version || '1.0').trim().slice(0, 64);
+  const iconBase64 = (input.iconBase64 || '').trim().slice(0, MAX_LENGTHS.iconBase64);
+  const uploaderName = (user.displayName || user.email?.split('@')[0] || 'Creator')
+    .trim()
+    .slice(0, MAX_LENGTHS.uploaderName);
 
   if (title.length < 1 || description.length < 1) {
     throw new Error('Title and description are required.');
   }
 
+  // Non-admin uploads MUST create catalog_items, encrypted_files, and chunks with status = "pending"
+  const initialStatus: CatalogStatus = isAdmin ? 'approved' : 'pending';
   const catalogItemId = generateId('item');
 
   if (input.itemType === 'encrypted_file') {
     if (!input.file) {
-      throw new Error('Please select a file to encrypt with AES-256-GCM.');
-    }
-    if (input.file.size < 1 || input.file.size > MAX_LENGTHS.maxFileBytes) {
-      throw new Error(
-        `File size must be between 1 byte and ${formatBytes(MAX_LENGTHS.maxFileBytes)}.`
-      );
+      throw new Error('Please select a file (up to 50 MB) to encrypt.');
     }
 
     const fileId = generateId('file');
-    const rawBytes = new Uint8Array(await input.file.arrayBuffer());
-    const fileCipher = await encryptBytesWithVaultKey(rawBytes);
-    const labelCipher = await encryptTextWithVaultKey(input.file.name);
-
-    const batch = writeBatch(db);
-    batch.set(doc(db, 'encrypted_files', fileId), {
+    const uploaded = await uploadEncryptedFileWithChunks({
+      fileId,
       catalogItemId,
-      fileName: input.file.name || 'file.bin',
-      mimeType: input.file.type || 'application/octet-stream',
-      byteSize: rawBytes.byteLength,
-      ciphertextBase64: fileCipher.ciphertextBase64,
-      ivBase64: fileCipher.ivBase64,
-      sha256Checksum: fileCipher.sha256Checksum,
-      encryptionAlgorithm: 'AES-256-GCM',
-      status: 'approved',
+      file: input.file,
+      status: initialStatus,
       uploaderUid: user.uid,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+      onProgress,
     });
 
-    batch.set(doc(db, 'catalog_items', catalogItemId), {
-      title,
-      description,
-      category: input.category,
-      itemType: 'encrypted_file',
-      version,
-      fileSizeLabel: formatBytes(rawBytes.byteLength),
-      creatorHandle: CREATOR_HANDLE,
-      encryptedTargetUrl: labelCipher.ciphertextBase64,
-      urlIv: labelCipher.ivBase64,
-      encryptedFileId: fileId,
-      sha256Checksum: fileCipher.sha256Checksum,
-      encryptionAlgorithm: 'AES-256-GCM',
-      status: 'approved',
-      downloadCount: 0,
-      averageRating: 0,
-      reviewCount: 0,
-      uploaderUid: user.uid,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    const labelCipher = await encryptTextWithVaultKey(input.file.name || 'file.bin');
+    const path = `catalog_items/${catalogItemId}`;
 
     try {
-      await batch.commit();
+      await setDoc(doc(db, 'catalog_items', catalogItemId), {
+        title,
+        description,
+        category: input.category,
+        itemType: 'encrypted_file',
+        version,
+        fileSizeLabel: formatBytes(uploaded.byteSize),
+        creatorHandle: CREATOR_HANDLE,
+        encryptedTargetUrl: labelCipher.ciphertextBase64,
+        urlIv: labelCipher.ivBase64,
+        encryptedFileId: fileId,
+        sha256Checksum: uploaded.sha256Checksum,
+        encryptionAlgorithm: 'AES-256-GCM',
+        status: initialStatus,
+        downloadCount: 0,
+        averageRating: 0,
+        reviewCount: 0,
+        uploaderUid: user.uid,
+        uploaderName,
+        iconBase64,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      onProgress?.('Published to KadirHub.', 100);
       return catalogItemId;
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `catalog_items/${catalogItemId}`);
+      handleFirestoreError(error, OperationType.CREATE, path);
     }
   } else {
     const cleanUrl = (input.targetUrl || '').trim();
@@ -406,8 +598,10 @@ export async function createCatalogItem(
       throw new Error('Please enter a valid http:// or https:// URL.');
     }
 
+    onProgress?.('Encrypting URL with AES-256-GCM...', 50);
     const urlCipher = await encryptTextWithVaultKey(cleanUrl);
     const path = `catalog_items/${catalogItemId}`;
+
     try {
       await setDoc(doc(db, 'catalog_items', catalogItemId), {
         title,
@@ -422,14 +616,17 @@ export async function createCatalogItem(
         encryptedFileId: '',
         sha256Checksum: urlCipher.sha256Checksum,
         encryptionAlgorithm: 'AES-256-GCM',
-        status: 'approved',
+        status: initialStatus,
         downloadCount: 0,
         averageRating: 0,
         reviewCount: 0,
         uploaderUid: user.uid,
+        uploaderName,
+        iconBase64,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      onProgress?.('Submitted!', 100);
       return catalogItemId;
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, path);
@@ -437,9 +634,127 @@ export async function createCatalogItem(
   }
 }
 
-// --- Direct Download & AES-256-GCM Decryption ---
+// --- Uploader Edit & Delete ---
 
-export async function decryptAndDownloadCatalogItem(item: CatalogItem): Promise<{
+export interface UpdateCatalogInput {
+  title: string;
+  description: string;
+  category: CatalogCategory;
+  itemType: CatalogItemType;
+  version: string;
+  targetUrl?: string;
+  newFile?: File | null;
+  iconBase64: string;
+}
+
+export async function updateCatalogItemByUploader(
+  user: User,
+  existing: CatalogItem,
+  input: UpdateCatalogInput,
+  isAdmin: boolean,
+  onProgress?: ProgressCallback
+): Promise<void> {
+  const title = input.title.trim().slice(0, MAX_LENGTHS.title);
+  const description = input.description.trim().slice(0, MAX_LENGTHS.description);
+  const version = (input.version || '1.0').trim().slice(0, 64);
+  const iconBase64 = input.iconBase64.trim().slice(0, MAX_LENGTHS.iconBase64);
+
+  if (title.length < 1 || description.length < 1) {
+    throw new Error('Title and description are required.');
+  }
+
+  // Critical v1.1.0 requirement: non-admin edits MUST reset status to "pending"
+  const nextStatus: CatalogStatus = isAdmin ? existing.status : 'pending';
+
+  const updateFields: Record<string, unknown> = {
+    title,
+    description,
+    category: input.category,
+    version,
+    iconBase64,
+    status: nextStatus,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (input.itemType === 'link') {
+    const cleanUrl = (input.targetUrl || '').trim();
+    if (cleanUrl) {
+      if (!/^https?:\/\/.+/i.test(cleanUrl)) {
+        throw new Error('Please enter a valid http:// or https:// URL.');
+      }
+      const urlCipher = await encryptTextWithVaultKey(cleanUrl);
+      updateFields.itemType = 'link';
+      updateFields.fileSizeLabel = 'Direct Link';
+      updateFields.encryptedTargetUrl = urlCipher.ciphertextBase64;
+      updateFields.urlIv = urlCipher.ivBase64;
+      updateFields.encryptedFileId = '';
+      updateFields.sha256Checksum = urlCipher.sha256Checksum;
+
+      if (existing.encryptedFileId) {
+        await deleteEncryptedFileAndChunks(existing.encryptedFileId);
+      }
+    } else if (existing.itemType === 'encrypted_file') {
+      throw new Error('Enter a target URL when switching from file to link.');
+    }
+  } else {
+    // itemType === 'encrypted_file'
+    if (input.newFile) {
+      const newFileId = generateId('file');
+      const uploaded = await uploadEncryptedFileWithChunks({
+        fileId: newFileId,
+        catalogItemId: existing.id,
+        file: input.newFile,
+        status: nextStatus,
+        uploaderUid: user.uid,
+        onProgress,
+      });
+      const labelCipher = await encryptTextWithVaultKey(input.newFile.name || 'file.bin');
+
+      updateFields.itemType = 'encrypted_file';
+      updateFields.fileSizeLabel = formatBytes(uploaded.byteSize);
+      updateFields.encryptedTargetUrl = labelCipher.ciphertextBase64;
+      updateFields.urlIv = labelCipher.ivBase64;
+      updateFields.encryptedFileId = newFileId;
+      updateFields.sha256Checksum = uploaded.sha256Checksum;
+
+      if (existing.encryptedFileId) {
+        await deleteEncryptedFileAndChunks(existing.encryptedFileId);
+      }
+    } else {
+      if (!existing.encryptedFileId) {
+        throw new Error('Select a file to attach.');
+      }
+      await updateEncryptedFileAndChunksStatus(existing.encryptedFileId, nextStatus);
+    }
+  }
+
+  const path = `catalog_items/${existing.id}`;
+  try {
+    await updateDoc(doc(db, 'catalog_items', existing.id), updateFields);
+    onProgress?.('Changes saved.', 100);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteCatalogItemAndFiles(item: CatalogItem): Promise<void> {
+  if (item.encryptedFileId) {
+    await deleteEncryptedFileAndChunks(item.encryptedFileId);
+  }
+  const path = `catalog_items/${item.id}`;
+  try {
+    await deleteDoc(doc(db, 'catalog_items', item.id));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+// --- Direct Download & Chunked AES-256-GCM Decryption ---
+
+export async function decryptAndDownloadCatalogItem(
+  item: CatalogItem,
+  onProgress?: ProgressCallback
+): Promise<{
   type: CatalogItemType;
   url?: string;
   fileName?: string;
@@ -460,15 +775,86 @@ export async function decryptAndDownloadCatalogItem(item: CatalogItem): Promise<
     }
 
     const fileDoc = mapEncryptedFile(fileSnap.id, fileSnap.data() as Record<string, unknown>);
-    const decrypted = await decryptBytesWithVaultKey(
-      fileDoc.ciphertextBase64,
-      fileDoc.ivBase64,
-      fileDoc.sha256Checksum || item.sha256Checksum
-    );
+    const expectedSha = fileDoc.sha256Checksum || item.sha256Checksum;
 
-    triggerBrowserFileDownload(decrypted.bytes, fileDoc.fileName, fileDoc.mimeType);
+    let finalBytes: Uint8Array;
+    let checksumVerified = false;
+    let actualSha256 = '';
 
-    if (auth.currentUser) {
+    if (fileDoc.chunkCount > 0) {
+      onProgress?.(`Fetching ${fileDoc.chunkCount} encrypted chunks...`, 5);
+      const chunkBuffers: Uint8Array[] = new Array(fileDoc.chunkCount);
+      let completed = 0;
+      const CONCURRENCY = 4;
+
+      for (let start = 0; start < fileDoc.chunkCount; start += CONCURRENCY) {
+        const indices: number[] = [];
+        for (let i = start; i < Math.min(fileDoc.chunkCount, start + CONCURRENCY); i++) {
+          indices.push(i);
+        }
+
+        await Promise.all(
+          indices.map(async (chunkIndex) => {
+            const chunkPath = `encrypted_files/${fileDoc.id}/chunks/chunk_${chunkIndex}`;
+            let chunkSnap;
+            try {
+              chunkSnap = await getDoc(
+                doc(db, 'encrypted_files', fileDoc.id, 'chunks', `chunk_${chunkIndex}`)
+              );
+            } catch (error) {
+              handleFirestoreError(error, OperationType.GET, chunkPath);
+            }
+            if (!chunkSnap.exists()) {
+              throw new Error(`Missing encrypted chunk_${chunkIndex}.`);
+            }
+            const chunkData = chunkSnap.data();
+            const decryptedChunk = await decryptBytesWithVaultKey(
+              String(chunkData.ciphertextBase64 ?? ''),
+              String(chunkData.ivBase64 ?? '')
+            );
+            chunkBuffers[chunkIndex] = decryptedChunk.bytes;
+            completed += 1;
+            const pct = Math.min(92, Math.round(5 + (completed / fileDoc.chunkCount) * 87));
+            onProgress?.(`Decrypting chunk ${completed}/${fileDoc.chunkCount}...`, pct);
+          })
+        );
+      }
+
+      const totalLength = chunkBuffers.reduce((acc, buf) => acc + buf.byteLength, 0);
+      finalBytes = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const buf of chunkBuffers) {
+        finalBytes.set(buf, offset);
+        offset += buf.byteLength;
+      }
+
+      onProgress?.('Verifying full-file SHA-256 checksum...', 96);
+      actualSha256 = await sha256Hex(finalBytes);
+      checksumVerified = expectedSha
+        ? actualSha256.toLowerCase() === expectedSha.toLowerCase()
+        : true;
+    } else {
+      onProgress?.('Decrypting file payload...', 50);
+      const decrypted = await decryptBytesWithVaultKey(
+        fileDoc.ciphertextBase64,
+        fileDoc.ivBase64,
+        expectedSha
+      );
+      finalBytes = decrypted.bytes;
+      checksumVerified = decrypted.checksumVerified;
+      actualSha256 = decrypted.actualSha256;
+    }
+
+    if (!checksumVerified) {
+      throw new Error(
+        `SHA-256 integrity verification failed! Expected ${expectedSha}, got ${actualSha256}. Download aborted.`
+      );
+    }
+
+    onProgress?.('Starting browser download...', 100);
+    triggerBrowserFileDownload(finalBytes, fileDoc.fileName, fileDoc.mimeType);
+
+    if (auth.currentUser && item.status === 'approved') {
       updateDoc(doc(db, 'catalog_items', item.id), {
         downloadCount: item.downloadCount + 1,
         updatedAt: serverTimestamp(),
@@ -478,8 +864,8 @@ export async function decryptAndDownloadCatalogItem(item: CatalogItem): Promise<
     return {
       type: 'encrypted_file',
       fileName: fileDoc.fileName,
-      checksumVerified: decrypted.checksumVerified,
-      actualSha256: decrypted.actualSha256,
+      checksumVerified,
+      actualSha256,
     };
   }
 
@@ -489,7 +875,7 @@ export async function decryptAndDownloadCatalogItem(item: CatalogItem): Promise<
     item.sha256Checksum
   );
 
-  if (auth.currentUser) {
+  if (auth.currentUser && item.status === 'approved') {
     updateDoc(doc(db, 'catalog_items', item.id), {
       downloadCount: item.downloadCount + 1,
       updatedAt: serverTimestamp(),
@@ -499,24 +885,6 @@ export async function decryptAndDownloadCatalogItem(item: CatalogItem): Promise<
   return {
     type: 'link',
     url: decrypted.text,
-    checksumVerified: decrypted.checksumVerified,
-    actualSha256: decrypted.actualSha256,
-  };
-}
-
-export async function decryptAndDownloadStandaloneFile(fileDoc: EncryptedFileDoc): Promise<{
-  fileName: string;
-  checksumVerified: boolean;
-  actualSha256: string;
-}> {
-  const decrypted = await decryptBytesWithVaultKey(
-    fileDoc.ciphertextBase64,
-    fileDoc.ivBase64,
-    fileDoc.sha256Checksum
-  );
-  triggerBrowserFileDownload(decrypted.bytes, fileDoc.fileName, fileDoc.mimeType);
-  return {
-    fileName: fileDoc.fileName,
     checksumVerified: decrypted.checksumVerified,
     actualSha256: decrypted.actualSha256,
   };
@@ -652,27 +1020,17 @@ export async function adminUpdateCatalogStatus(
       status,
       updatedAt: serverTimestamp(),
     });
-    if (item.encryptedFileId) {
-      await updateDoc(doc(db, 'encrypted_files', item.encryptedFileId), {
-        status,
-        updatedAt: serverTimestamp(),
-      }).catch(() => {});
-    }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+
+  if (item.encryptedFileId) {
+    await updateEncryptedFileAndChunksStatus(item.encryptedFileId, status);
   }
 }
 
 export async function adminDeleteCatalogItem(item: CatalogItem): Promise<void> {
-  const path = `catalog_items/${item.id}`;
-  try {
-    await deleteDoc(doc(db, 'catalog_items', item.id));
-    if (item.encryptedFileId) {
-      await deleteDoc(doc(db, 'encrypted_files', item.encryptedFileId)).catch(() => {});
-    }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, path);
-  }
+  await deleteCatalogItemAndFiles(item);
 }
 
 export async function adminModerateReview(

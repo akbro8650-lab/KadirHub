@@ -2,7 +2,7 @@
   "entities": {
     "CatalogItem": {
       "title": "CatalogItem",
-      "description": "App or link directory item compatible with KadirHub Android & Web.",
+      "description": "App or link directory item compatible with KadirHub Android & Web v1.1.0.",
       "type": "object",
       "properties": {
         "title": { "type": "string", "minLength": 1, "maxLength": 120 },
@@ -17,11 +17,13 @@
         "encryptedFileId": { "type": "string" },
         "sha256Checksum": { "type": "string", "minLength": 64, "maxLength": 64 },
         "encryptionAlgorithm": { "type": "string", "enum": ["AES-256-GCM"] },
-        "status": { "type": "string", "enum": ["approved", "flagged", "archived"] },
+        "status": { "type": "string", "enum": ["pending", "approved", "flagged", "archived"] },
         "downloadCount": { "type": "integer" },
         "averageRating": { "type": "number" },
         "reviewCount": { "type": "integer" },
         "uploaderUid": { "type": "string" },
+        "uploaderName": { "type": "string", "maxLength": 120 },
+        "iconBase64": { "type": "string", "maxLength": 120000 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -29,31 +31,54 @@
         "title", "description", "category", "itemType", "version", "fileSizeLabel",
         "creatorHandle", "encryptedTargetUrl", "urlIv", "encryptedFileId",
         "sha256Checksum", "encryptionAlgorithm", "status", "downloadCount",
-        "averageRating", "reviewCount", "uploaderUid", "createdAt", "updatedAt"
+        "averageRating", "reviewCount", "uploaderUid", "uploaderName", "iconBase64",
+        "createdAt", "updatedAt"
       ]
     },
     "EncryptedFile": {
       "title": "EncryptedFile",
-      "description": "AES-256-GCM encrypted file payload stored in Firestore.",
+      "description": "AES-256-GCM encrypted file metadata or inline payload (up to 50 MB chunked).",
       "type": "object",
       "properties": {
         "catalogItemId": { "type": "string" },
         "fileName": { "type": "string" },
         "mimeType": { "type": "string" },
         "byteSize": { "type": "integer" },
+        "chunkCount": { "type": "integer" },
         "ciphertextBase64": { "type": "string" },
         "ivBase64": { "type": "string" },
         "sha256Checksum": { "type": "string", "minLength": 64, "maxLength": 64 },
         "encryptionAlgorithm": { "type": "string", "enum": ["AES-256-GCM"] },
-        "status": { "type": "string", "enum": ["approved", "flagged", "archived"] },
+        "status": { "type": "string", "enum": ["pending", "approved", "flagged", "archived"] },
         "uploaderUid": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
-        "catalogItemId", "fileName", "mimeType", "byteSize", "ciphertextBase64",
-        "ivBase64", "sha256Checksum", "encryptionAlgorithm", "status",
-        "uploaderUid", "createdAt", "updatedAt"
+        "catalogItemId", "fileName", "mimeType", "byteSize", "chunkCount",
+        "ciphertextBase64", "ivBase64", "sha256Checksum", "encryptionAlgorithm",
+        "status", "uploaderUid", "createdAt", "updatedAt"
+      ]
+    },
+    "EncryptedFileChunk": {
+      "title": "EncryptedFileChunk",
+      "description": "450KB encrypted chunk for files larger than 450000 bytes.",
+      "type": "object",
+      "properties": {
+        "fileId": { "type": "string" },
+        "catalogItemId": { "type": "string" },
+        "chunkIndex": { "type": "integer" },
+        "byteSize": { "type": "integer" },
+        "ciphertextBase64": { "type": "string" },
+        "ivBase64": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "flagged", "archived"] },
+        "uploaderUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "fileId", "catalogItemId", "chunkIndex", "byteSize", "ciphertextBase64",
+        "ivBase64", "status", "uploaderUid", "createdAt", "updatedAt"
       ]
     },
     "Review": {
@@ -102,11 +127,15 @@
   "firestore": {
     "/catalog_items/{itemId}": {
       "schema": { "$ref": "#/entities/CatalogItem" },
-      "description": "Shared KadirHub directory catalog items."
+      "description": "Shared KadirHub v1.1.0 directory catalog items."
     },
     "/encrypted_files/{fileId}": {
       "schema": { "$ref": "#/entities/EncryptedFile" },
-      "description": "AES-256-GCM encrypted file payloads."
+      "description": "AES-256-GCM encrypted file headers/inline payloads."
+    },
+    "/encrypted_files/{fileId}/chunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/EncryptedFileChunk" },
+      "description": "Chunked 450KB encrypted binary segments for files up to 50 MB."
     },
     "/reviews/{reviewId}": {
       "schema": { "$ref": "#/entities/Review" },
