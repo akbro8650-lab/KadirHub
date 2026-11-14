@@ -1,0 +1,363 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Hardened Global Primitives ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isRootAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'kadir25.bd@gmail.com';
+    }
+
+    function isAdmin() {
+      return isRootAdmin() || (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    // --- Validation Blueprints ---
+    function isValidUserPublic(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'handle', 'photoURL', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'handle', 'photoURL', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.handle is string && data.handle.size() >= 1 && data.handle.size() <= 60
+        && data.photoURL is string && data.photoURL.size() <= 500
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivate(data) {
+      return data.keys().hasAll(['uid', 'email', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRecord(data) {
+      return data.keys().hasAll(['uid', 'email', 'grantedBy', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'email', 'grantedBy', 'createdAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.grantedBy is string && data.grantedBy.size() >= 1 && data.grantedBy.size() <= 128
+        && data.createdAt is timestamp;
+    }
+
+    function isValidDirectoryEntry(data) {
+      return data.keys().hasAll([
+          'id', 'title', 'summary', 'description', 'category', 'platform', 'version',
+          'fileSizeLabel', 'payloadType', 'cipherText', 'cipherIv', 'cipherSalt',
+          'cipherAlgo', 'payloadFileName', 'payloadMimeType', 'isPassphraseProtected',
+          'checksum', 'thumbnailKey', 'authorUid', 'authorName', 'authorHandle',
+          'status', 'moderationNote', 'ratingAvg', 'ratingCount', 'downloadCount',
+          'featured', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'title', 'summary', 'description', 'category', 'platform', 'version',
+          'fileSizeLabel', 'payloadType', 'cipherText', 'cipherIv', 'cipherSalt',
+          'cipherAlgo', 'payloadFileName', 'payloadMimeType', 'isPassphraseProtected',
+          'checksum', 'thumbnailKey', 'authorUid', 'authorName', 'authorHandle',
+          'status', 'moderationNote', 'ratingAvg', 'ratingCount', 'downloadCount',
+          'featured', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 100
+        && data.summary is string && data.summary.size() >= 5 && data.summary.size() <= 240
+        && data.description is string && data.description.size() >= 10 && data.description.size() <= 2000
+        && data.category in ['app', 'utility', 'link', 'vault']
+        && data.platform in ['Windows', 'macOS', 'Android', 'Linux', 'Web', 'Cross-Platform']
+        && data.version is string && data.version.size() >= 1 && data.version.size() <= 32
+        && data.fileSizeLabel is string && data.fileSizeLabel.size() >= 1 && data.fileSizeLabel.size() <= 32
+        && data.payloadType in ['link', 'file']
+        && data.cipherText is string && data.cipherText.size() >= 1 && data.cipherText.size() <= 750000
+        && data.cipherIv is string && data.cipherIv.size() >= 8 && data.cipherIv.size() <= 64
+        && data.cipherSalt is string && data.cipherSalt.size() >= 8 && data.cipherSalt.size() <= 64
+        && data.cipherAlgo == 'AES-256-GCM'
+        && data.payloadFileName is string && data.payloadFileName.size() >= 1 && data.payloadFileName.size() <= 160
+        && data.payloadMimeType is string && data.payloadMimeType.size() >= 1 && data.payloadMimeType.size() <= 100
+        && data.isPassphraseProtected is bool
+        && data.checksum is string && data.checksum.size() >= 8 && data.checksum.size() <= 128
+        && data.thumbnailKey in ['hero', 'utility', 'vault', 'none']
+        && isValidId(data.authorUid)
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80
+        && data.authorHandle is string && data.authorHandle.size() >= 1 && data.authorHandle.size() <= 60
+        && data.status in ['pending', 'approved', 'rejected']
+        && data.moderationNote is string && data.moderationNote.size() <= 300
+        && data.ratingAvg is number && data.ratingAvg >= 0 && data.ratingAvg <= 5
+        && data.ratingCount is int && data.ratingCount >= 0
+        && data.downloadCount is int && data.downloadCount >= 0
+        && data.featured is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidEntryReview(data) {
+      return data.keys().hasAll(['entryId', 'authorUid', 'authorName', 'rating', 'comment', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['entryId', 'authorUid', 'authorName', 'rating', 'comment', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.entryId)
+        && isValidId(data.authorUid)
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80
+        && data.rating is int && data.rating >= 1 && data.rating <= 5
+        && data.comment is string && data.comment.size() >= 3 && data.comment.size() <= 800
+        && data.status in ['visible', 'hidden']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVaultItem(data) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'ownerName', 'title', 'itemType', 'fileName', 'mimeType',
+          'byteSize', 'cipherText', 'cipherIv', 'cipherSalt', 'cipherAlgo',
+          'checksum', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'ownerName', 'title', 'itemType', 'fileName', 'mimeType',
+          'byteSize', 'cipherText', 'cipherIv', 'cipherSalt', 'cipherAlgo',
+          'checksum', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.ownerUid)
+        && data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 80
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 100
+        && data.itemType in ['file', 'link']
+        && data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 160
+        && data.mimeType is string && data.mimeType.size() >= 1 && data.mimeType.size() <= 100
+        && data.byteSize is int && data.byteSize >= 0 && data.byteSize <= 750000
+        && data.cipherText is string && data.cipherText.size() >= 1 && data.cipherText.size() <= 750000
+        && data.cipherIv is string && data.cipherIv.size() >= 8 && data.cipherIv.size() <= 64
+        && data.cipherSalt is string && data.cipherSalt.size() >= 8 && data.cipherSalt.size() <= 64
+        && data.cipherAlgo == 'AES-256-GCM'
+        && data.checksum is string && data.checksum.size() >= 8 && data.checksum.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    // Public profiles (no PII)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isSignedIn();
+      allow list: if isRootAdmin();
+
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && request.auth.uid == userId
+        && isValidUserPublic(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && request.auth.uid == userId
+        && isValidUserPublic(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'handle', 'photoURL', 'updatedAt']);
+
+      allow delete: if isValidId(userId) && isRootAdmin();
+
+      // Isolated Private PII
+      match /private/info {
+        allow get: if isValidId(userId) && ((isSignedIn() && request.auth.uid == userId) || isAdmin());
+        allow create: if isVerifiedUser()
+          && isValidId(userId)
+          && request.auth.uid == userId
+          && isValidUserPrivate(incoming())
+          && incoming().uid == request.auth.uid
+          && incoming().updatedAt == request.time;
+        allow update: if isVerifiedUser()
+          && isValidId(userId)
+          && request.auth.uid == userId
+          && isValidUserPrivate(incoming())
+          && incoming().uid == existing().uid
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'updatedAt']);
+        allow delete: if isValidId(userId) && isRootAdmin();
+      }
+    }
+
+    // Trusted Admins Registry
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && isVerifiedUser() && (request.auth.uid == userId || isRootAdmin());
+      allow list: if isRootAdmin();
+      allow create: if isRootAdmin()
+        && isValidId(userId)
+        && isValidAdminRecord(incoming())
+        && incoming().uid == userId
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isRootAdmin() && isValidId(userId);
+    }
+
+    // App & Link Directory Entries
+    match /entries/{entryId} {
+      allow get: if isValidId(entryId)
+        && (existing().status == 'approved'
+          || (isSignedIn() && existing().authorUid == request.auth.uid)
+          || isAdmin());
+
+      allow list: if existing().status == 'approved'
+        || (isSignedIn() && existing().authorUid == request.auth.uid)
+        || isRootAdmin();
+
+      allow create: if isVerifiedUser()
+        && isValidId(entryId)
+        && isValidDirectoryEntry(incoming())
+        && incoming().id == entryId
+        && incoming().authorUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && incoming().ratingAvg == 0
+        && incoming().ratingCount == 0
+        && incoming().downloadCount == 0
+        && (
+          isAdmin()
+          || (incoming().status == 'pending' && incoming().featured == false && incoming().moderationNote == '')
+        );
+
+      allow update: if isVerifiedUser()
+        && isValidId(entryId)
+        && isValidDirectoryEntry(incoming())
+        && incoming().id == existing().id
+        && incoming().authorUid == existing().authorUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Tier 1: Admin moderation & catalog curation
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'summary', 'description', 'category', 'platform', 'version',
+            'fileSizeLabel', 'payloadType', 'cipherText', 'cipherIv', 'cipherSalt',
+            'payloadFileName', 'payloadMimeType', 'isPassphraseProtected', 'checksum',
+            'thumbnailKey', 'status', 'moderationNote', 'featured', 'ratingAvg',
+            'ratingCount', 'updatedAt'
+          ]))
+          ||
+          // Tier 2: Author editing own pending/rejected submission before approval
+          (existing().authorUid == request.auth.uid
+            && existing().status != 'approved'
+            && incoming().status == 'pending'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'summary', 'description', 'category', 'platform', 'version',
+              'fileSizeLabel', 'payloadType', 'cipherText', 'cipherIv', 'cipherSalt',
+              'payloadFileName', 'payloadMimeType', 'isPassphraseProtected', 'checksum',
+              'thumbnailKey', 'status', 'updatedAt'
+            ]))
+          ||
+          // Action: Atomic rating aggregate update backed by user's review doc
+          (existing().status == 'approved'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['ratingAvg', 'ratingCount', 'updatedAt'])
+            && (
+              existsAfter(/databases/$(database)/documents/entries/$(entryId)/reviews/$(request.auth.uid))
+              || exists(/databases/$(database)/documents/entries/$(entryId)/reviews/$(request.auth.uid))
+            ))
+          ||
+          // Action: Direct download counter increment on approved entry
+          (existing().status == 'approved'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['downloadCount', 'updatedAt'])
+            && incoming().downloadCount == existing().downloadCount + 1)
+        );
+
+      allow delete: if isValidId(entryId)
+        && (isAdmin() || (isVerifiedUser() && existing().authorUid == request.auth.uid && existing().status != 'approved'));
+
+      // Reviews & 5-Star Ratings subcollection (1 review per user per entry: reviewId == uid)
+      match /reviews/{reviewId} {
+        allow get: if isValidId(entryId) && isValidId(reviewId)
+          && (existing().status == 'visible'
+            || (isSignedIn() && existing().authorUid == request.auth.uid)
+            || isAdmin());
+
+        allow list: if existing().status == 'visible'
+          || (isSignedIn() && existing().authorUid == request.auth.uid)
+          || isRootAdmin();
+
+        allow create: if isVerifiedUser()
+          && isValidId(entryId)
+          && isValidId(reviewId)
+          && reviewId == request.auth.uid
+          && isValidEntryReview(incoming())
+          && incoming().entryId == entryId
+          && incoming().authorUid == request.auth.uid
+          && incoming().status == 'visible'
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/entries/$(entryId))
+          && get(/databases/$(database)/documents/entries/$(entryId)).data.status == 'approved';
+
+        allow update: if isVerifiedUser()
+          && isValidId(entryId)
+          && isValidId(reviewId)
+          && isValidEntryReview(incoming())
+          && incoming().entryId == existing().entryId
+          && incoming().authorUid == existing().authorUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+            || (existing().authorUid == request.auth.uid
+              && incoming().status == 'visible'
+              && incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'comment', 'updatedAt']))
+          );
+
+        allow delete: if isValidId(entryId) && isValidId(reviewId)
+          && (isAdmin() || (isVerifiedUser() && existing().authorUid == request.auth.uid));
+      }
+    }
+
+    // Encrypted AES-256-GCM Personal Vault Storage
+    match /vaultItems/{itemId} {
+      allow get: if isValidId(itemId) && isSignedIn() && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerUid == request.auth.uid;
+
+      allow create: if isVerifiedUser()
+        && isValidId(itemId)
+        && isValidVaultItem(incoming())
+        && incoming().id == itemId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(itemId)
+        && isValidVaultItem(incoming())
+        && existing().ownerUid == request.auth.uid
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'fileName', 'mimeType', 'byteSize', 'cipherText',
+          'cipherIv', 'cipherSalt', 'checksum', 'updatedAt'
+        ]);
+
+      allow delete: if isVerifiedUser()
+        && isValidId(itemId)
+        && existing().ownerUid == request.auth.uid;
+    }
+  }
+}

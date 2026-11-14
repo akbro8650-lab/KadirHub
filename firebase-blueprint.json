@@ -1,0 +1,120 @@
+{
+  "entities": {
+    "CatalogItem": {
+      "title": "CatalogItem",
+      "description": "App or link directory item compatible with KadirHub Android & Web.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "category": { "type": "string", "enum": ["App", "Link", "Tool", "Game", "Resource"] },
+        "itemType": { "type": "string", "enum": ["link", "encrypted_file"] },
+        "version": { "type": "string", "maxLength": 64 },
+        "fileSizeLabel": { "type": "string", "maxLength": 64 },
+        "creatorHandle": { "type": "string", "maxLength": 64 },
+        "encryptedTargetUrl": { "type": "string" },
+        "urlIv": { "type": "string" },
+        "encryptedFileId": { "type": "string" },
+        "sha256Checksum": { "type": "string", "minLength": 64, "maxLength": 64 },
+        "encryptionAlgorithm": { "type": "string", "enum": ["AES-256-GCM"] },
+        "status": { "type": "string", "enum": ["approved", "flagged", "archived"] },
+        "downloadCount": { "type": "integer" },
+        "averageRating": { "type": "number" },
+        "reviewCount": { "type": "integer" },
+        "uploaderUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "title", "description", "category", "itemType", "version", "fileSizeLabel",
+        "creatorHandle", "encryptedTargetUrl", "urlIv", "encryptedFileId",
+        "sha256Checksum", "encryptionAlgorithm", "status", "downloadCount",
+        "averageRating", "reviewCount", "uploaderUid", "createdAt", "updatedAt"
+      ]
+    },
+    "EncryptedFile": {
+      "title": "EncryptedFile",
+      "description": "AES-256-GCM encrypted file payload stored in Firestore.",
+      "type": "object",
+      "properties": {
+        "catalogItemId": { "type": "string" },
+        "fileName": { "type": "string" },
+        "mimeType": { "type": "string" },
+        "byteSize": { "type": "integer" },
+        "ciphertextBase64": { "type": "string" },
+        "ivBase64": { "type": "string" },
+        "sha256Checksum": { "type": "string", "minLength": 64, "maxLength": 64 },
+        "encryptionAlgorithm": { "type": "string", "enum": ["AES-256-GCM"] },
+        "status": { "type": "string", "enum": ["approved", "flagged", "archived"] },
+        "uploaderUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "catalogItemId", "fileName", "mimeType", "byteSize", "ciphertextBase64",
+        "ivBase64", "sha256Checksum", "encryptionAlgorithm", "status",
+        "uploaderUid", "createdAt", "updatedAt"
+      ]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "User 5-star review for a catalog item (doc ID: itemId_uid).",
+      "type": "object",
+      "properties": {
+        "itemId": { "type": "string" },
+        "itemTitle": { "type": "string" },
+        "userId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "rating": { "type": "integer" },
+        "comment": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "moderationStatus": { "type": "string", "enum": ["visible", "flagged", "hidden"] },
+        "flagReason": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "itemId", "itemTitle", "userId", "authorName", "rating", "comment",
+        "moderationStatus", "flagReason", "createdAt", "updatedAt"
+      ]
+    },
+    "ModerationReport": {
+      "title": "ModerationReport",
+      "description": "User-submitted report for content moderation queue.",
+      "type": "object",
+      "properties": {
+        "targetType": { "type": "string", "enum": ["catalog_item", "review"] },
+        "targetId": { "type": "string" },
+        "targetTitle": { "type": "string" },
+        "reporterUid": { "type": "string" },
+        "reporterName": { "type": "string" },
+        "reason": { "type": "string", "minLength": 3, "maxLength": 400 },
+        "status": { "type": "string", "enum": ["open", "resolved", "dismissed"] },
+        "adminNotes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "targetType", "targetId", "targetTitle", "reporterUid", "reporterName",
+        "reason", "status", "adminNotes", "createdAt", "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/catalog_items/{itemId}": {
+      "schema": { "$ref": "#/entities/CatalogItem" },
+      "description": "Shared KadirHub directory catalog items."
+    },
+    "/encrypted_files/{fileId}": {
+      "schema": { "$ref": "#/entities/EncryptedFile" },
+      "description": "AES-256-GCM encrypted file payloads."
+    },
+    "/reviews/{reviewId}": {
+      "schema": { "$ref": "#/entities/Review" },
+      "description": "5-star reviews keyed by itemId_uid."
+    },
+    "/moderation_reports/{reportId}": {
+      "schema": { "$ref": "#/entities/ModerationReport" },
+      "description": "Moderation queue reports for catalog items and reviews."
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "KadirHub",
+  "description": "KadirHub app & link directory by @kadirofficial007 with direct downloads, user reviews, 5-star ratings, content moderation, and AES-256-GCM encrypted storage backed by Firebase.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
