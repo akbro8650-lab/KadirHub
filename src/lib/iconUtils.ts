@@ -1,5 +1,5 @@
 // Convert any user-selected image into a 160x160 center-cropped WebP raw Base64 string (<= 120000 chars)
-import { MAX_LENGTHS } from '@/src/types/kadirhub';
+import { APK_LIMITS } from '@/src/types/kadirhub';
 
 export async function processAppIconToWebPBase64(file: File): Promise<string> {
   if (!file.type.startsWith('image/')) {
@@ -36,7 +36,7 @@ export async function processAppIconToWebPBase64(file: File): Promise<string> {
     for (const quality of qualities) {
       const dataUrl = canvas.toDataURL('image/webp', quality);
       const rawBase64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
-      if (rawBase64.length <= MAX_LENGTHS.iconBase64) {
+      if (rawBase64.length <= APK_LIMITS.iconBase64) {
         return rawBase64;
       }
     }

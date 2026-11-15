@@ -1,25 +1,18 @@
-# KadirHub Security Specification (Phase 0 TDD)
+# KadirHub APK Distribution Security Specification (Phase 0 TDD)
 
 ## 1. Core Data Invariants
-1. **Identity Integrity**: No user may create or mutate a `users/{uid}`, `entries/{id}`, `reviews/{uid}`, or `vaultItems/{id}` document with an `authorUid`/`ownerUid`/`uid` different from `request.auth.uid`.
-2. **PII Isolation**: User email addresses are stored exclusively in `/users/{userId}/private/info` and are readable only by the owning user (`request.auth.uid == userId`) or a verified admin.
-3. **Zero Self-Promotion**: Users cannot create or modify `/admins/{uid}` documents unless they are the bootstrapped owner (`kadir25.bd@gmail.com` with `email_verified == true`).
-4. **Moderation State Integrity**: Standard users creating `/entries/{entryId}` MUST set `status == 'pending'`, `ratingAvg == 0`, `ratingCount == 0`, `downloadCount == 0`, `featured == false`, and `moderationNote == ''`. Only admins may approve, reject, or feature directory entries.
-5. **Terminal Approved State Lock**: Once an entry is `approved`, its author cannot modify its encrypted download payload or metadata without admin intervention (prevents bait-and-switch malware injection after approval).
-6. **Review Uniqueness & Atomicity**: Each user can maintain at most one review per entry (`/entries/{entryId}/reviews/{request.auth.uid}`), only on `approved` entries, and aggregate rating updates on `/entries/{entryId}` require atomic batch existence verification (`existsAfter` / `exists`).
-7. **Temporal Integrity**: All `createdAt` and `updatedAt` fields must equal `request.time` on creation, `createdAt` is immutable on update, and `updatedAt` must equal `request.time` on update.
-8. **Path & Size Hardening**: Every document ID matches `^[a-zA-Z0-9_\-]+$` (max 128 chars), and all strings enforce explicit `.size()` bounds.
+1. **Owner-Only Mutations**: Only the verified owner account (`kadir25.bd@gmail.com` with `request.auth.token.email_verified == true`) may create, update, or delete `/apk_releases`, `/apk_files`, and `/apk_files/{releaseId}/chunks`.
+2. **Unauthenticated Public Downloads**: Public visitors do not need to sign in to view or download published APK releases (`isPublished == true`). Unpublished/draft releases remain unreadable to non-owners.
+3. **Strict Schema Enforcement**: Every write enforces `hasAll` + `hasOnly`, exact string lengths, valid IDs (`^[a-zA-Z0-9_\-]+$`), lowercase 64-char SHA-256 hex format, and strict immutable `createdAt` / `uploaderUid`.
+4. **Relational Integrity**: `/apk_releases/{releaseId}` creation requires `exists(/databases/$(database)/documents/apk_files/$(releaseId))`, and chunk reads inherit `isPublished == true` from the parent `/apk_files/{releaseId}` document via `get()`.
+5. **Temporal Integrity**: `createdAt` and `updatedAt` must equal `request.time` on creation, and `updatedAt` must equal `request.time` on update.
 
-## 2. The "Dirty Dozen" Attack Payloads
-1. **Identity Spoofing on Entry Create**: `authorUid: "victim_uid"` while signed in as `attacker_uid` -> `PERMISSION_DENIED`.
-2. **Self-Approval Bypass**: Standard user creates entry with `status: "approved"` -> `PERMISSION_DENIED`.
-3. **Admin Self-Promotion**: Standard user writes `/admins/{attacker_uid}` -> `PERMISSION_DENIED`.
-4. **Shadow Field Injection**: Creating an entry with extra key `isVerifiedOfficial: true` -> `PERMISSION_DENIED` (`hasOnly` rejection).
-5. **Bait-and-Switch Approved Payload**: Original author updates `cipherText` on an already-`approved` entry -> `PERMISSION_DENIED`.
-6. **Unverified Email Spoofing**: Token has `email: "kadir25.bd@gmail.com"` with `email_verified: false` -> `PERMISSION_DENIED`.
-7. **PII Scraping**: Non-owner user calls `get` on `/users/{otherUid}/private/info` -> `PERMISSION_DENIED`.
-8. **Pending Queue Scraping**: Non-admin user lists `/entries` without `status == 'approved'` or `authorUid == uid` -> `PERMISSION_DENIED`.
-9. **ID Poisoning**: Creating `/entries/../../../../etc/passwd` or 500-char ID -> `PERMISSION_DENIED`.
-10. **Ciphertext DoS / Oversized Payload**: `cipherText` exceeding 750,000 chars -> `PERMISSION_DENIED`.
-11. **Backdated Timestamp Forgery**: `createdAt` set to client timestamp in the past instead of `request.time` -> `PERMISSION_DENIED`.
-12. **Vault Cross-Tenant Read**: User B attempts `get` or `list` on User A's `/vaultItems/{itemId}` -> `PERMISSION_DENIED`.
+## 2. Adversarial Attack Matrix
+1. **Non-Owner Write**: Any authenticated or unauthenticated user other than `kadir25.bd@gmail.com` writes to `/apk_releases` or `/apk_files` -> `PERMISSION_DENIED`.
+2. **Unverified Owner Email Spoof**: Token has `email: "kadir25.bd@gmail.com"` with `email_verified: false` -> `PERMISSION_DENIED`.
+3. **Shadow Field Injection**: Owner payload includes undeclared field `adminOverride: true` -> `PERMISSION_DENIED` (`hasOnly` check).
+4. **Unpublished Release Scraping**: Visitor calls `get` or `list` on `/apk_releases` where `isPublished == false` -> `PERMISSION_DENIED`.
+5. **Orphaned Release Record**: Creating `/apk_releases/{id}` without a matching `/apk_files/{id}` payload -> `PERMISSION_DENIED`.
+6. **Chunk Size / Ciphertext DoS**: Chunk `ciphertextBase64` exceeding `750,000` chars or `byteSize > 450,000` -> `PERMISSION_DENIED`.
+7. **ID Poisoning**: Document ID containing slashes or >128 chars -> `PERMISSION_DENIED`.
+8. **Backdated Timestamp Forgery**: `createdAt` set to a client-supplied past timestamp instead of `request.time` -> `PERMISSION_DENIED`.

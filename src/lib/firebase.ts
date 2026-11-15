@@ -3,15 +3,9 @@ import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-export const KADIRHUB_DATABASE_ID =
-  'ai-studio-android-kadirhub-3cc1a69b-aa21-4dfe-a6b2-9c465ee91b20';
+const app = initializeApp(firebaseConfig);
 
-const app = initializeApp({
-  ...firebaseConfig,
-  projectId: 'gen-lang-client-0984811326',
-});
-
-export const db = getFirestore(app, KADIRHUB_DATABASE_ID);
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });

@@ -1,149 +1,93 @@
 {
   "entities": {
-    "CatalogItem": {
-      "title": "CatalogItem",
-      "description": "App or link directory item compatible with KadirHub Android & Web v1.1.0.",
+    "ApkRelease": {
+      "title": "ApkRelease",
+      "description": "Published KadirHub Android APK release metadata with version info, changelog description, SHA-256 digest, and optional WebP app icon.",
       "type": "object",
       "properties": {
-        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
-        "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
-        "category": { "type": "string", "enum": ["App", "Link", "Tool", "Game", "Resource"] },
-        "itemType": { "type": "string", "enum": ["link", "encrypted_file"] },
-        "version": { "type": "string", "maxLength": 64 },
-        "fileSizeLabel": { "type": "string", "maxLength": 64 },
-        "creatorHandle": { "type": "string", "maxLength": 64 },
-        "encryptedTargetUrl": { "type": "string" },
-        "urlIv": { "type": "string" },
-        "encryptedFileId": { "type": "string" },
-        "sha256Checksum": { "type": "string", "minLength": 64, "maxLength": 64 },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "appName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "packageName": { "type": "string", "maxLength": 160 },
+        "versionName": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "versionCode": { "type": "integer" },
+        "description": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "fileName": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "mimeType": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "byteSize": { "type": "integer" },
+        "fileSizeLabel": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "chunkCount": { "type": "integer" },
+        "sha256Checksum": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$" },
         "encryptionAlgorithm": { "type": "string", "enum": ["AES-256-GCM"] },
-        "status": { "type": "string", "enum": ["pending", "approved", "flagged", "archived"] },
-        "downloadCount": { "type": "integer" },
-        "averageRating": { "type": "number" },
-        "reviewCount": { "type": "integer" },
-        "uploaderUid": { "type": "string" },
-        "uploaderName": { "type": "string", "maxLength": 120 },
         "iconBase64": { "type": "string", "maxLength": 120000 },
+        "isMain": { "type": "boolean" },
+        "isPublished": { "type": "boolean" },
+        "uploaderUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
-        "title", "description", "category", "itemType", "version", "fileSizeLabel",
-        "creatorHandle", "encryptedTargetUrl", "urlIv", "encryptedFileId",
-        "sha256Checksum", "encryptionAlgorithm", "status", "downloadCount",
-        "averageRating", "reviewCount", "uploaderUid", "uploaderName", "iconBase64",
-        "createdAt", "updatedAt"
+        "id", "appName", "packageName", "versionName", "versionCode", "description",
+        "fileName", "mimeType", "byteSize", "fileSizeLabel", "chunkCount",
+        "sha256Checksum", "encryptionAlgorithm", "iconBase64", "isMain",
+        "isPublished", "uploaderUid", "createdAt", "updatedAt"
       ]
     },
-    "EncryptedFile": {
-      "title": "EncryptedFile",
-      "description": "AES-256-GCM encrypted file metadata or inline payload (up to 50 MB chunked).",
+    "ApkFilePayload": {
+      "title": "ApkFilePayload",
+      "description": "AES-256-GCM encrypted APK file header and inline ciphertext (when <= 450,000 bytes) or chunk manifest.",
       "type": "object",
       "properties": {
-        "catalogItemId": { "type": "string" },
-        "fileName": { "type": "string" },
-        "mimeType": { "type": "string" },
+        "releaseId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fileName": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "mimeType": { "type": "string", "minLength": 1, "maxLength": 120 },
         "byteSize": { "type": "integer" },
         "chunkCount": { "type": "integer" },
-        "ciphertextBase64": { "type": "string" },
-        "ivBase64": { "type": "string" },
-        "sha256Checksum": { "type": "string", "minLength": 64, "maxLength": 64 },
-        "encryptionAlgorithm": { "type": "string", "enum": ["AES-256-GCM"] },
-        "status": { "type": "string", "enum": ["pending", "approved", "flagged", "archived"] },
-        "uploaderUid": { "type": "string" },
+        "ciphertextBase64": { "type": "string", "maxLength": 750000 },
+        "ivBase64": { "type": "string", "maxLength": 64 },
+        "sha256Checksum": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$" },
+        "isPublished": { "type": "boolean" },
+        "uploaderUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
-        "catalogItemId", "fileName", "mimeType", "byteSize", "chunkCount",
-        "ciphertextBase64", "ivBase64", "sha256Checksum", "encryptionAlgorithm",
-        "status", "uploaderUid", "createdAt", "updatedAt"
+        "releaseId", "fileName", "mimeType", "byteSize", "chunkCount",
+        "ciphertextBase64", "ivBase64", "sha256Checksum", "isPublished",
+        "uploaderUid", "createdAt", "updatedAt"
       ]
     },
-    "EncryptedFileChunk": {
-      "title": "EncryptedFileChunk",
-      "description": "450KB encrypted chunk for files larger than 450000 bytes.",
+    "ApkFileChunk": {
+      "title": "ApkFileChunk",
+      "description": "Encrypted 450,000-byte APK segment stored under /apk_files/{releaseId}/chunks/chunk_{index}.",
       "type": "object",
       "properties": {
-        "fileId": { "type": "string" },
-        "catalogItemId": { "type": "string" },
+        "releaseId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "chunkIndex": { "type": "integer" },
         "byteSize": { "type": "integer" },
-        "ciphertextBase64": { "type": "string" },
-        "ivBase64": { "type": "string" },
-        "status": { "type": "string", "enum": ["pending", "approved", "flagged", "archived"] },
-        "uploaderUid": { "type": "string" },
+        "ciphertextBase64": { "type": "string", "minLength": 1, "maxLength": 750000 },
+        "ivBase64": { "type": "string", "minLength": 8, "maxLength": 64 },
+        "uploaderUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
-        "fileId", "catalogItemId", "chunkIndex", "byteSize", "ciphertextBase64",
-        "ivBase64", "status", "uploaderUid", "createdAt", "updatedAt"
-      ]
-    },
-    "Review": {
-      "title": "Review",
-      "description": "User 5-star review for a catalog item (doc ID: itemId_uid).",
-      "type": "object",
-      "properties": {
-        "itemId": { "type": "string" },
-        "itemTitle": { "type": "string" },
-        "userId": { "type": "string" },
-        "authorName": { "type": "string" },
-        "rating": { "type": "integer" },
-        "comment": { "type": "string", "minLength": 1, "maxLength": 1000 },
-        "moderationStatus": { "type": "string", "enum": ["visible", "flagged", "hidden"] },
-        "flagReason": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": [
-        "itemId", "itemTitle", "userId", "authorName", "rating", "comment",
-        "moderationStatus", "flagReason", "createdAt", "updatedAt"
-      ]
-    },
-    "ModerationReport": {
-      "title": "ModerationReport",
-      "description": "User-submitted report for content moderation queue.",
-      "type": "object",
-      "properties": {
-        "targetType": { "type": "string", "enum": ["catalog_item", "review"] },
-        "targetId": { "type": "string" },
-        "targetTitle": { "type": "string" },
-        "reporterUid": { "type": "string" },
-        "reporterName": { "type": "string" },
-        "reason": { "type": "string", "minLength": 3, "maxLength": 400 },
-        "status": { "type": "string", "enum": ["open", "resolved", "dismissed"] },
-        "adminNotes": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": [
-        "targetType", "targetId", "targetTitle", "reporterUid", "reporterName",
-        "reason", "status", "adminNotes", "createdAt", "updatedAt"
+        "releaseId", "chunkIndex", "byteSize", "ciphertextBase64", "ivBase64",
+        "uploaderUid", "createdAt", "updatedAt"
       ]
     }
   },
   "firestore": {
-    "/catalog_items/{itemId}": {
-      "schema": { "$ref": "#/entities/CatalogItem" },
-      "description": "Shared KadirHub v1.1.0 directory catalog items."
+    "/apk_releases/{releaseId}": {
+      "schema": { "$ref": "#/entities/ApkRelease" },
+      "description": "Publicly readable APK release versions and changelogs; writable exclusively by kadir25.bd@gmail.com."
     },
-    "/encrypted_files/{fileId}": {
-      "schema": { "$ref": "#/entities/EncryptedFile" },
-      "description": "AES-256-GCM encrypted file headers/inline payloads."
+    "/apk_files/{releaseId}": {
+      "schema": { "$ref": "#/entities/ApkFilePayload" },
+      "description": "AES-256-GCM encrypted APK file manifest or single-doc payload; publicly downloadable without sign-in when published."
     },
-    "/encrypted_files/{fileId}/chunks/{chunkId}": {
-      "schema": { "$ref": "#/entities/EncryptedFileChunk" },
-      "description": "Chunked 450KB encrypted binary segments for files up to 50 MB."
-    },
-    "/reviews/{reviewId}": {
-      "schema": { "$ref": "#/entities/Review" },
-      "description": "5-star reviews keyed by itemId_uid."
-    },
-    "/moderation_reports/{reportId}": {
-      "schema": { "$ref": "#/entities/ModerationReport" },
-      "description": "Moderation queue reports for catalog items and reviews."
+    "/apk_files/{releaseId}/chunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/ApkFileChunk" },
+      "description": "Encrypted 450KB chunks for large APK downloads up to 100 MB."
     }
   }
 }
